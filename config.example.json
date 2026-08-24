@@ -1,5 +1,5 @@
 {
   "root": "/Users/ritesh/Workspace/acme-widgets",
-  "branch": "main",
+  "target_branch": "main",
   "exclude_repos": ["legacy-sandbox", "spike-experiment"]
 }

@@ -448,12 +448,12 @@ def main():
 
     parser = argparse.ArgumentParser(description="Sync git repos under a root folder onto a target branch.")
     parser.add_argument("--root", default=None, help="Root folder containing the repos (default: config.json's 'root', else cwd)")
-    parser.add_argument("--branch", default=None, help="Target branch to sync to (default: config.json's 'branch', else release/dev)")
+    parser.add_argument("--branch", default=None, help="Target branch to sync to (default: config.json's 'target_branch', else release/dev)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen without changing anything")
     args = parser.parse_args()
 
     root = os.path.abspath(args.root or config.get("root") or os.getcwd())
-    branch = args.branch or config.get("branch") or "release/dev"
+    branch = args.branch or config.get("target_branch") or "release/dev"
     exclude_repos = set(config.get("exclude_repos", []))
 
     if not os.path.isdir(root):
