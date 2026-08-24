@@ -13,16 +13,23 @@ For each immediate subfolder of --root that is a git repo:
     menu (stash / stash+pull+pop / show diff / skip / apply-to-all) once
     the automatic pass is done.
 
+Reads defaults from config.json next to this script if present (see
+config.example.json for the format). CLI args override the config file,
+which overrides built-in defaults.
+
 Usage:
     python3 sync_repos.py [--root PATH] [--branch release/dev] [--dry-run]
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+
+CONFIG_FILENAME = "config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +171,7 @@ class RepoStatus:
     branch_exists_remotely: bool = False
     error: str = None
     action: str = None  # what happened / will happen, for the summary
+    up_to_date: bool = None  # set after a real (non-dry-run) pull succeeds
 
     @property
     def has_working_tree_changes(self):
@@ -235,14 +243,23 @@ def pull_branch(repo_path, status, dry_run):
         print(cyan("  [dry-run] would run: git pull --ff-only"))
         return True
     try:
+        before_sha = run_git(repo_path, ["rev-parse", "HEAD"]).stdout.strip()
         result = run_git(repo_path, ["pull", "--ff-only"], check=False)
         if result.returncode != 0:
             status.action = yellow(f"checked out but pull failed (diverged?): {result.stderr.strip()}")
             return False
+        after_sha = run_git(repo_path, ["rev-parse", "HEAD"]).stdout.strip()
+        status.up_to_date = before_sha == after_sha
         return True
     except GitError as exc:
         status.action = red(f"pull failed: {exc}")
         return False
+
+
+def sync_note(status, dry_run):
+    if dry_run:
+        return "dry-run"
+    return "already up to date" if status.up_to_date else "pulled new commits"
 
 
 def sync_clean_repo(repo_path, branch, status, dry_run):
@@ -252,7 +269,7 @@ def sync_clean_repo(repo_path, branch, status, dry_run):
         status.action = yellow("no remote configured, checked out only")
         return
     if pull_branch(repo_path, status, dry_run):
-        status.action = green(f"synced to '{branch}'" + (" (dry-run)" if dry_run else ""))
+        status.action = green(f"synced to '{branch}' ({sync_note(status, dry_run)})")
 
 
 def stash_changes(repo_path, dry_run):
@@ -338,15 +355,16 @@ def handle_dirty_repo(status, branch, action, dry_run):
     if not pull_branch(repo_path, status, dry_run):
         return
 
+    note = sync_note(status, dry_run)
     if action == "stash-pop" and status.has_working_tree_changes:
         if stash_pop(repo_path, dry_run):
-            status.action = green("synced + stash popped")
+            status.action = green(f"synced ({note}) + stash popped")
         else:
-            status.action = yellow("synced, stash left in stash list (pop conflict)")
+            status.action = yellow(f"synced ({note}), stash left in stash list (pop conflict)")
     elif action == "stash":
-        status.action = yellow("synced, changes left in stash list (run `git stash pop` manually)")
+        status.action = yellow(f"synced ({note}), changes left in stash list (run `git stash pop` manually)")
     else:
-        status.action = green(f"synced to '{branch}' (ahead commits remain in reflog)")
+        status.action = green(f"synced to '{branch}' ({note}, ahead commits remain in reflog)")
 
 
 def run_interactive_pass(dirty_statuses, branch, dry_run):
@@ -394,13 +412,27 @@ def run_interactive_pass(dirty_statuses, branch, dry_run):
 # main
 # ---------------------------------------------------------------------------
 
-def discover_repos(root):
+def discover_repos(root, exclude_repos=()):
     repos = []
     for entry in sorted(os.listdir(root)):
+        if entry in exclude_repos:
+            continue
         full_path = os.path.join(root, entry)
         if os.path.isdir(full_path) and is_git_repo(full_path):
             repos.append(full_path)
     return repos
+
+
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILENAME)
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(yellow(f"warning: could not read {config_path}: {exc}"))
+        return {}
 
 
 def print_summary(statuses):
@@ -412,39 +444,44 @@ def print_summary(statuses):
 
 
 def main():
+    config = load_config()
+
     parser = argparse.ArgumentParser(description="Sync git repos under a root folder onto a target branch.")
-    parser.add_argument("--root", default=os.getcwd(), help="Root folder containing the repos (default: cwd)")
-    parser.add_argument("--branch", default="release/dev", help="Target branch to sync to (default: release/dev)")
+    parser.add_argument("--root", default=None, help="Root folder containing the repos (default: config.json's 'root', else cwd)")
+    parser.add_argument("--branch", default=None, help="Target branch to sync to (default: config.json's 'branch', else release/dev)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen without changing anything")
     args = parser.parse_args()
 
-    root = os.path.abspath(args.root)
+    root = os.path.abspath(args.root or config.get("root") or os.getcwd())
+    branch = args.branch or config.get("branch") or "release/dev"
+    exclude_repos = set(config.get("exclude_repos", []))
+
     if not os.path.isdir(root):
         print(red(f"root folder not found: {root}"))
         sys.exit(1)
 
-    repos = discover_repos(root)
+    repos = discover_repos(root, exclude_repos)
     if not repos:
         print(yellow(f"no git repos found directly under {root}"))
         return
 
-    print(bold(f"Scanning {len(repos)} repo(s) under {root} -> target branch '{args.branch}'"))
+    print(bold(f"Scanning {len(repos)} repo(s) under {root} -> target branch '{branch}'"))
     if args.dry_run:
         print(cyan("(dry-run: no changes will be made)"))
 
     statuses = []
     dirty_statuses = []
     for repo_path in repos:
-        status = inspect_repo(repo_path, args.branch)
+        status = inspect_repo(repo_path, branch)
         statuses.append(status)
         if status.error:
             continue
         if status.is_dirty:
             dirty_statuses.append(status)
         else:
-            sync_clean_repo(repo_path, args.branch, status, args.dry_run)
+            sync_clean_repo(repo_path, branch, status, args.dry_run)
 
-    run_interactive_pass(dirty_statuses, args.branch, args.dry_run)
+    run_interactive_pass(dirty_statuses, branch, args.dry_run)
     print_summary(statuses)
 
 
