@@ -1,5 +1,7 @@
 {
   "root": "/Users/ritesh/Workspace/acme-widgets",
   "target_branch": "main",
-  "exclude_repos": ["legacy-sandbox", "spike-experiment"]
+  "exclude_repos": ["legacy-sandbox", "spike-experiment"],
+  "git_username": "ritesh@example.com",
+  "hours": 24
 }
