@@ -60,3 +60,19 @@ python3 python-tools/sync_repos.py --root /path/to/other/folder --branch main
 - Dirty repos prompt you interactively, then report what was done (synced,
   skipped, or left stashed with a reminder to `git stash pop` manually).
 - A final summary table lists the outcome for every repo scanned.
+
+## doc_text.py
+
+Turns a PDF, DOCX or PPTX into compact text that is cheap to read (for people and for AI agents):
+drops headers/footers repeated on most pages, page numbers, blank lines, extra spaces and duplicate
+pages; marks pages as `## p<N>`; writes `<file>.txt` and prints a size report (chars, ~tokens).
+Reports scanned PDFs (no text layer) instead of returning nothing.
+
+```
+pip install pypdf python-docx python-pptx
+python doc_text.py paper.pdf                    # write paper.txt + size report
+python doc_text.py paper.pdf --outline          # headings / question lines only
+python doc_text.py paper.pdf --pages 3-5        # some pages (slides for .pptx)
+python doc_text.py paper.pdf --grep Maslow -C 1 # matching lines with context
+python doc_text.py paper.pdf --print            # full cleaned text
+```
